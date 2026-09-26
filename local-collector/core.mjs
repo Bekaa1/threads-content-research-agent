@@ -23,11 +23,28 @@ export function selectQueries(queries, cursor, count = 4) {
   return Array.from({ length: Math.min(count, queries.length) }, (_,i) => queries[(cursor+i) % queries.length]);
 }
 
-export function freshPosts(posts, now = Date.now()) {
+const topicAliases = [
+  ['сайт','лендинг','веб','верст','вёрст','website','web','site','landing','wordpress','shopify'],
+  ['разработ','программ','developer','programmer','coder','coding','software','engineer'],
+  ['crm','срм','амосрм','amocrm','kommo','коммо','битрикс','bitrix','воронк'],
+  ['автоматиз','automation','automate','automating','workflow','n8n'],
+  ['интегратор','интеграц','integrator','integration','integrate','integrating','api'],
+  ['бот','бота','ботов','чатбот','bot','bots','chatbot','assistant','ассистент'],
+  ['приложен','мобильн','app','apps','mobile','reactnative']
+];
+export function matchesTopic(query,text) {
+  const words = s => s.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+  const contains = (ws, aliases) => ws.some(w=>aliases.some(a=>w===a || (a.length>=4 && w.startsWith(a))));
+  const topics=topicAliases.filter(aliases=>contains(words(query),aliases));
+  // Unknown custom queries are still validated by the server's stricter check.
+  return !topics.length || topics.some(aliases=>contains(words(text),aliases));
+}
+
+export function freshPosts(posts, now = Date.now(), query = '') {
   const seen = new Set();
   return posts.filter(p => {
     const date = Date.parse(p.posted_at);
-    if (!Number.isFinite(date) || date > now + 300000 || date < now - 30*86400000 || !p.text?.trim() || p.text.length > 10000 || seen.has(p.permalink)) return false;
+    if (!Number.isFinite(date) || date > now + 300000 || date < now - 30*86400000 || !p.text?.trim() || p.text.length > 10000 || seen.has(p.permalink) || !matchesTopic(query,p.text)) return false;
     seen.add(p.permalink);
     return true;
   }).slice(0,5); // Four queries x five posts: at most 20 candidate posts per cycle.

@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { freshPosts, selectQueries, validateConfig, renderReport } from './core.mjs';
+import { freshPosts, selectQueries, validateConfig, renderReport, matchesTopic } from './core.mjs';
+test('intent words alone do not consume the candidate budget',()=>{
+ assert.equal(matchesTopic('ищу разработчика','Ищу дом для котёнка'),false);
+ assert.equal(matchesTopic('ищу разработчика','Нужен программист для проекта'),true);
+ assert.equal(matchesTopic('looking for CRM','Need Kommo integration'),true);
+});
 test('rotation and bounded fresh deduplication',()=>{
   assert.deepEqual(selectQueries(['a','b','c'],2),['c','a','b']);
   const p={permalink:'https://www.threads.com/@buyer/post/Ddv8MUkGt1S',text:'Need a website',posted_at:new Date().toISOString()};

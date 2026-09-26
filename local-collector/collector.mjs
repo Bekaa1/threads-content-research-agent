@@ -30,6 +30,13 @@ if (command === 'init') {
 }
 if (command === 'status') { console.log(JSON.stringify(await read('status.json',{ state:'not_started' }),null,2)); process.exit(0); }
 if (command === 'stop') { await writeFile(path('stop'),'stop'); console.log('Stop requested.'); process.exit(0); }
+if (command === 'account') {
+  if (await exists('lock.json')) throw new Error('stop_collector_before_changing_account');
+  const next=validateConfig({...await read('config.json',null),expectedUser:process.argv[3]});
+  await save('config.json',next);
+  console.log('Expected Threads account: '+next.expectedUser);
+  process.exit(0);
+}
 if (!['start','once'].includes(command)) throw new Error('unknown_command');
 const cfg = validateConfig(await read('config.json',null));
 // Stale locks may be cleared only when their exact recorded process no longer exists.
@@ -79,7 +86,7 @@ async function flush() {
 }
 async function collect(page,query) {
   const url = new URL('https://www.threads.com/search');
-  url.searchParams.set('q',query); url.searchParams.set('filter','recent');
+  url.searchParams.set('q',query); url.searchParams.set('serp_type','default'); url.searchParams.set('filter','recent');
   const response = await page.goto(url.href,{waitUntil:'domcontentloaded',timeout:45000});
   if (response?.status()===429) throw new Error('threads_rate_limited');
   if (response && response.status()>=400) throw new Error('threads_http_error');
@@ -103,14 +110,14 @@ async function collect(page,query) {
   if (!['ok','empty'].includes(found.status)) throw new Error(`threads_${found.status}`);
   const candidates = [...found.posts];
   // A bounded scroll only, no infinite harvesting and no clicks/replies/likes.
-  for(let i=0; i<2 && freshPosts(candidates).length<5 && found.status!=='empty'; i++) {
+  for(let i=0; i<2 && freshPosts(candidates,Date.now(),query).length<5 && found.status!=='empty'; i++) {
     await page.mouse.wheel(0,700);
     await wait(2000); if(stopped) return null;
     found=await page.evaluate(readSearchDOM,{query,expectedUser:cfg.expectedUser});
     if(!['ok','empty'].includes(found.status)) throw new Error(`threads_${found.status}`);
     candidates.push(...found.posts);
   }
-  return { query,source_url:url.href,posts:freshPosts(candidates) };
+  return { query,source_url:url.href,posts:freshPosts(candidates,Date.now(),query) };
 }
 for(const signal of ['SIGINT','SIGTERM']) process.on(signal,()=>{stopped=true;});
 try {

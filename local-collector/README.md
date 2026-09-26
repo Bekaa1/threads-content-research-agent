@@ -25,6 +25,7 @@ node collector.mjs init https://YOUR-WORKER.code.run/ingest/posts YOUR_THREADS_U
 - Double-click `report.cmd`: local audit of the last 50 query batches (candidates, **not** all qualified leads).
 - Double-click `stop.cmd`: gracefully stops collection, usually within a few seconds (up to one navigation timeout).
 - `npm run status`: safe status only; no keys.
+- `node collector.mjs account USERNAME`: bind to the visibly verified test account while the collector is stopped; no password/cookie export.
 - `npm run once`: one cycle, still observes persisted cooldown; waits for login if necessary.
 - `npm test`: isolated DOM fixture and configuration tests; no live Threads traffic.
 
