@@ -88,7 +88,7 @@ func TestIngestRejectsInvalidPosts(t *testing.T) {
 		change func(*browserPost)
 	}{
 		{"off topic", func(p *browserPost) { p.Text = "Happy birthday to my cat" }},
-		{"stale", func(p *browserPost) { p.PostedAt = time.Now().Add(-31 * 24 * time.Hour) }},
+		{"stale", func(p *browserPost) { p.PostedAt = time.Now().Add(-49 * time.Hour) }},
 		{"future", func(p *browserPost) { p.PostedAt = time.Now().Add(time.Hour) }},
 		{"missing date", func(p *browserPost) { p.PostedAt = time.Time{} }},
 		{"foreign URL", func(p *browserPost) { p.Permalink = "https://evil.example/@buyer/post/Ddv8MUkGt1S" }},

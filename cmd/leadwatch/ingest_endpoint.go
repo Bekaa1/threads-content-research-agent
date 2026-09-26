@@ -67,7 +67,7 @@ func ingestPostsHandler(key string, store ingestStore, trigger func(), logger *s
 				continue
 			}
 			parts := browserPostPath.FindStringSubmatch(link.Path)
-			if len(parts) != 3 || post.PostedAt.IsZero() || post.PostedAt.After(now.Add(5*time.Minute)) || post.PostedAt.Before(now.Add(-30*24*time.Hour)) || len([]rune(post.Text)) > 10000 || !leadwatch.MatchesQueryTopic(batch.Query, post.Text) {
+			if len(parts) != 3 || post.PostedAt.IsZero() || post.PostedAt.After(now.Add(5*time.Minute)) || post.PostedAt.Before(now.Add(-leadwatch.MaxPostAge)) || len([]rune(post.Text)) > 10000 || !leadwatch.MatchesQueryTopic(batch.Query, post.Text) {
 				continue
 			}
 			id := thid.ShortcodeToPK(parts[2])

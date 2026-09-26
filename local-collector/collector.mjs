@@ -70,11 +70,23 @@ async function wait(ms) {
 }
 async function flush() {
   for (const batch of [...runtime.outbox]) {
-    const result = await uploadBatch(cfg.endpoint,cfg.key,batch);
+    const posts = freshPosts(batch.posts,Date.now(),batch.query);
+    if (!posts.length) {
+      runtime.outbox.shift();
+      await save('runtime.json',runtime);
+      await update('expired_outbox_discarded',{query:batch.query});
+      continue;
+    }
+    // Persist only fresh posts before retrying an old outbox batch, so expired
+    // content is neither uploaded nor kept queued after the 48-hour cutoff.
+    const outgoing = {...batch,posts};
+    runtime.outbox[0] = outgoing;
+    await save('runtime.json',runtime);
+    const result = await uploadBatch(cfg.endpoint,cfg.key,outgoing);
     if (!Number.isInteger(result.stored) || !Number.isInteger(result.accepted)) throw new Error('upload_invalid_response');
     runtime.outbox.shift();
     await save('runtime.json',runtime);
-    audit.push({ at:new Date().toISOString(), query:batch.query, posts:batch.posts, status:`uploaded: accepted=${result.accepted}, new=${result.stored}, rejected=${result.rejected}` });
+    audit.push({ at:new Date().toISOString(), query:batch.query, posts:outgoing.posts, status:`uploaded: accepted=${result.accepted}, new=${result.stored}, rejected=${result.rejected}` });
     audit=audit.slice(-50);
     await save('audit.json',audit);
     await update('uploaded',{query:batch.query,...result});

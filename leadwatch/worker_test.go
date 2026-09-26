@@ -30,15 +30,19 @@ type fakeAnalyzer struct{}
 func (fakeAnalyzer) Analyze(_ context.Context, posts []threads.SearchResult, _ string) ([]Assessment, error) {
 	result := make([]Assessment, 0, len(posts))
 	for _, post := range posts {
-		result = append(result, Assessment{PostID: post.ID, Qualified: strings.Contains(post.Text, "need a developer"), Score: 88, Category: "website", Reason: "explicit request", Draft: "What are you looking to build?"})
+		result = append(result, Assessment{PostID: post.ID, Qualified: strings.Contains(post.Text, "need a developer"), Score: 88, Category: "website", Reason: "explicit request", DMDraft: "What are you looking to build?", CommentDraft: "What are you looking to build?"})
 	}
 	return result, nil
 }
 
-type fakeNotifier struct{ messages []string }
+type fakeNotifier struct {
+	leads    []Lead
+	messages []string
+}
 
-func (f *fakeNotifier) Send(_ context.Context, message string) error {
-	f.messages = append(f.messages, message)
+func (f *fakeNotifier) Send(_ context.Context, lead Lead) error {
+	f.leads = append(f.leads, lead)
+	f.messages = append(f.messages, formatTelegramLead(lead))
 	return nil
 }
 
@@ -97,8 +101,8 @@ func (s *memoryStore) MarkNotified(_ context.Context, id string) error {
 
 func TestRunOnceNotifiesQualifiedPostOnlyAndDeduplicates(t *testing.T) {
 	posts := []threads.SearchResult{
-		{ID: "buyer-1", Query: "q", Username: "prospect", Text: "We need a developer for our website", Permalink: "https://www.threads.com/@prospect/post/abc"},
-		{ID: "seller-1", Query: "q", Username: "seller", Text: "I am a developer looking for clients"},
+		{ID: "buyer-1", Query: "q", Username: "prospect", Text: "We need a developer for our website", Permalink: "https://www.threads.com/@prospect/post/abc", Timestamp: time.Now()},
+		{ID: "seller-1", Query: "q", Username: "seller", Text: "I am a developer looking for clients", Timestamp: time.Now()},
 		{ID: "old-buyer", Query: "q", Username: "old", Text: "We need a developer", Timestamp: time.Now().Add(-60 * 24 * time.Hour)},
 	}
 	for i := range posts {
@@ -114,11 +118,11 @@ func TestRunOnceNotifiesQualifiedPostOnlyAndDeduplicates(t *testing.T) {
 	if err := worker.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(notifier.messages) != 1 {
-		t.Fatalf("got %d notifications, want 1", len(notifier.messages))
+	if len(notifier.leads) != 1 {
+		t.Fatalf("got %d notifications, want 1", len(notifier.leads))
 	}
-	if store.assessments["old-buyer"].Qualified {
-		t.Fatal("stale post was marked as qualified")
+	if _, exists := store.posts["old-buyer"]; exists {
+		t.Fatal("stale post entered the store")
 	}
 	if !strings.Contains(notifier.messages[0], "Новый лид") || !strings.Contains(notifier.messages[0], "developer") {
 		t.Fatalf("unexpected notification: %s", notifier.messages[0])
@@ -126,8 +130,8 @@ func TestRunOnceNotifiesQualifiedPostOnlyAndDeduplicates(t *testing.T) {
 	if err := worker.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(notifier.messages) != 1 {
-		t.Fatalf("duplicate notification sent; got %d", len(notifier.messages))
+	if len(notifier.leads) != 1 {
+		t.Fatalf("duplicate notification sent; got %d", len(notifier.leads))
 	}
 }
 
@@ -144,6 +148,16 @@ func TestParseQueriesTrimsAndDeduplicates(t *testing.T) {
 	got := parseQueries(" one | two\n one |  ")
 	if len(got) != 2 || got[0] != "one" || got[1] != "two" {
 		t.Fatalf("unexpected queries: %#v", got)
+	}
+}
+
+func TestWithinPostAgeRejectsMissingAndOlderThanTwoDays(t *testing.T) {
+	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	if withinPostAge(time.Time{}, now) || withinPostAge(now.Add(-MaxPostAge-time.Second), now) {
+		t.Fatal("missing or older-than-48-hour timestamp accepted")
+	}
+	if !withinPostAge(now.Add(-MaxPostAge), now) || !withinPostAge(now, now) {
+		t.Fatal("timestamp inside the 48-hour window rejected")
 	}
 }
 

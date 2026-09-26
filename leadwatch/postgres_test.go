@@ -56,7 +56,7 @@ func TestPostgresSearchProvenance(t *testing.T) {
 	if leads, err := store.PendingNotifications(ctx, 10); err != nil || len(leads) != 0 {
 		t.Fatalf("legacy entered notifications: %v %v", leads, err)
 	}
-	post := threads.SearchResult{ID: "buyer", Query: "CRM", Text: "Need a CRM integrator", Username: "buyer", Permalink: "https://www.threads.com/@buyer/post/TEST", Source: threads.SearchSourceSSR, SourceURL: "https://www.threads.com/search?q=CRM", SearchedAt: time.Now()}
+	post := threads.SearchResult{ID: "buyer", Query: "CRM", Text: "Need a CRM integrator", Username: "buyer", Permalink: "https://www.threads.com/@buyer/post/TEST", Source: threads.SearchSourceSSR, SourceURL: "https://www.threads.com/search?q=CRM", Timestamp: time.Now(), SearchedAt: time.Now()}
 	inserted, err := store.InsertNew(ctx, []threads.SearchResult{post, {ID: "noise", Text: "frog"}})
 	if err != nil || len(inserted) != 1 {
 		t.Fatalf("inserted=%v err=%v", inserted, err)

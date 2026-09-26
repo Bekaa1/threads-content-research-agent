@@ -43,8 +43,10 @@ func NewPostgresStore(ctx context.Context, db *sql.DB) (*PostgresStore, error) {
 	// search provenance was verified. No historical rows are deleted.
 	if _, err := db.ExecContext(ctx, `ALTER TABLE leadwatch_posts
 		ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '',
-		ADD COLUMN IF NOT EXISTS source_url TEXT NOT NULL DEFAULT ''`); err != nil {
-		return nil, errors.New("could not initialize search provenance columns")
+		ADD COLUMN IF NOT EXISTS source_url TEXT NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS dm_draft TEXT NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS comment_draft TEXT NOT NULL DEFAULT ''`); err != nil {
+		return nil, errors.New("could not initialize search provenance and draft columns")
 	}
 	return &PostgresStore{db: db}, nil
 }
@@ -61,7 +63,7 @@ func (s *PostgresStore) InsertNew(ctx context.Context, posts []threads.SearchRes
 		ON CONFLICT (post_id) DO UPDATE SET
 		query=EXCLUDED.query,post_text=EXCLUDED.post_text,source=EXCLUDED.source,source_url=EXCLUDED.source_url,
 		posted_at=EXCLUDED.posted_at,shortcode=EXCLUDED.shortcode,username=EXCLUDED.username,permalink=EXCLUDED.permalink,
-		searched_at=EXCLUDED.searched_at,classified_at=NULL,qualified=NULL,score=NULL,category='',reason='',draft=''
+		searched_at=EXCLUDED.searched_at,classified_at=NULL,qualified=NULL,score=NULL,category='',reason='',draft='',dm_draft='',comment_draft=''
 		WHERE leadwatch_posts.source=''`
 	for _, post := range posts {
 		if post.ID == "" || post.Text == "" || !post.VerifiedSearch() {
@@ -92,7 +94,8 @@ func (s *PostgresStore) InsertNew(ctx context.Context, posts []threads.SearchRes
 
 func (s *PostgresStore) Unclassified(ctx context.Context, limit int) ([]threads.SearchResult, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,shortcode,post_text,username,permalink,posted_at,searched_at,source,source_url
-		FROM leadwatch_posts WHERE classified_at IS NULL AND source IN ('threads_search_ssr','threads_search_graphql','threads_browser_search')
+		FROM leadwatch_posts WHERE classified_at IS NULL AND posted_at >= NOW() - INTERVAL '48 hours' AND posted_at <= NOW() + INTERVAL '5 minutes'
+		AND source IN ('threads_search_ssr','threads_search_graphql','threads_browser_search')
 		ORDER BY searched_at ASC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -151,7 +154,7 @@ func (s *PostgresStore) RecentPosts(ctx context.Context, limit int) ([]ScannedPo
 }
 
 func (s *PostgresStore) SaveAssessment(ctx context.Context, a Assessment) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE leadwatch_posts SET qualified=$2,score=$3,category=$4,reason=$5,draft=$6,classified_at=NOW() WHERE post_id=$1 AND classified_at IS NULL`, a.PostID, a.Qualified, a.Score, a.Category, a.Reason, a.Draft)
+	result, err := s.db.ExecContext(ctx, `UPDATE leadwatch_posts SET qualified=$2,score=$3,category=$4,reason=$5,draft=$6,dm_draft=$7,comment_draft=$8,classified_at=NOW() WHERE post_id=$1 AND classified_at IS NULL`, a.PostID, a.Qualified, a.Score, a.Category, a.Reason, a.CommentDraft, a.DMDraft, a.CommentDraft)
 	if err != nil {
 		return err
 	}
@@ -166,8 +169,10 @@ func (s *PostgresStore) SaveAssessment(ctx context.Context, a Assessment) error 
 }
 
 func (s *PostgresStore) PendingNotifications(ctx context.Context, limit int) ([]Lead, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,shortcode,post_text,username,permalink,posted_at,searched_at,qualified,score,category,reason,draft,source,source_url
+	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,shortcode,post_text,username,permalink,posted_at,searched_at,qualified,score,category,reason,
+		COALESCE(NULLIF(dm_draft,''),''),COALESCE(NULLIF(comment_draft,''),NULLIF(draft,''),''),source,source_url
 		FROM leadwatch_posts WHERE classified_at IS NOT NULL AND qualified=TRUE AND notified_at IS NULL
+		AND posted_at >= NOW() - INTERVAL '48 hours' AND posted_at <= NOW() + INTERVAL '5 minutes'
 		AND source IN ('threads_search_ssr','threads_search_graphql','threads_browser_search')
 		ORDER BY score DESC, searched_at ASC LIMIT $1`, limit)
 	if err != nil {
@@ -178,7 +183,7 @@ func (s *PostgresStore) PendingNotifications(ctx context.Context, limit int) ([]
 	for rows.Next() {
 		var lead Lead
 		var postedAt sql.NullTime
-		if err := rows.Scan(&lead.ID, &lead.Query, &lead.Shortcode, &lead.Text, &lead.Username, &lead.Permalink, &postedAt, &lead.SearchedAt, &lead.Qualified, &lead.Score, &lead.Category, &lead.Reason, &lead.Draft, &lead.Source, &lead.SourceURL); err != nil {
+		if err := rows.Scan(&lead.ID, &lead.Query, &lead.Shortcode, &lead.Text, &lead.Username, &lead.Permalink, &postedAt, &lead.SearchedAt, &lead.Qualified, &lead.Score, &lead.Category, &lead.Reason, &lead.DMDraft, &lead.CommentDraft, &lead.Source, &lead.SourceURL); err != nil {
 			return nil, err
 		}
 		if postedAt.Valid {

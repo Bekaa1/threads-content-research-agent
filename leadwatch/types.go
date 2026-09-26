@@ -13,13 +13,17 @@ type Searcher interface {
 }
 
 type Assessment struct {
-	PostID    string `json:"post_id"`
-	Qualified bool   `json:"qualified"`
-	Score     int    `json:"score"`
-	Category  string `json:"category"`
-	Reason    string `json:"reason"`
-	Draft     string `json:"draft"`
+	PostID       string `json:"post_id"`
+	Qualified    bool   `json:"qualified"`
+	Score        int    `json:"score"`
+	Category     string `json:"category"`
+	Reason       string `json:"reason"`
+	DMDraft      string `json:"dm_draft"`
+	CommentDraft string `json:"comment_draft"`
 }
+
+// MaxPostAge is the maximum age of a post eligible for analysis or outreach.
+const MaxPostAge = 48 * time.Hour
 
 type Lead struct {
 	threads.SearchResult
@@ -48,7 +52,7 @@ type Analyzer interface {
 }
 
 type Notifier interface {
-	Send(context.Context, string) error
+	Send(context.Context, Lead) error
 }
 
 type Store interface {

@@ -44,7 +44,7 @@ export function freshPosts(posts, now = Date.now(), query = '') {
   const seen = new Set();
   return posts.filter(p => {
     const date = Date.parse(p.posted_at);
-    if (!Number.isFinite(date) || date > now + 300000 || date < now - 30*86400000 || !p.text?.trim() || p.text.length > 10000 || seen.has(p.permalink) || !matchesTopic(query,p.text)) return false;
+    if (!Number.isFinite(date) || date > now + 300000 || date < now - 2*86400000 || !p.text?.trim() || p.text.length > 10000 || seen.has(p.permalink) || !matchesTopic(query,p.text)) return false;
     seen.add(p.permalink);
     return true;
   }).slice(0,5); // Four queries x five posts: at most 20 candidate posts per cycle.

@@ -39,7 +39,7 @@ func TestIngestSharedBudgetAndNoAnonymousRequests(t *testing.T) {
 	analyzer := &countingAnalyzer{}
 	for i := 0; i < 30; i++ {
 		id := fmt.Sprint(i)
-		store.posts[id] = threads.SearchResult{ID: id, Source: threads.SearchSourceBrowser, Text: "I build websites"}
+		store.posts[id] = threads.SearchResult{ID: id, Source: threads.SearchSourceBrowser, Text: "I build websites", Timestamp: time.Now()}
 	}
 	w, _ := NewWorker(forbiddenSearcher{t}, analyzer, &fakeNotifier{}, store, []string{"website"}, "", nil)
 	w.UseIngestOnly()
@@ -63,7 +63,7 @@ func TestIngestBudgetCountsFailedAttempts(t *testing.T) {
 	store := newMemoryStore()
 	for i := 0; i < 10; i++ {
 		id := fmt.Sprint(i)
-		store.posts[id] = threads.SearchResult{ID: id}
+		store.posts[id] = threads.SearchResult{ID: id, Timestamp: time.Now()}
 	}
 	analyzer := &countingAnalyzer{fail: true}
 	w, _ := NewWorker(forbiddenSearcher{t}, analyzer, &fakeNotifier{}, store, []string{"website"}, "", nil)

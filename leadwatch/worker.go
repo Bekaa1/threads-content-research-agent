@@ -27,8 +27,6 @@ type Worker struct {
 	budgetRemaining int
 }
 
-const maxLeadAge = 30 * 24 * time.Hour
-
 var errSearchRateLimited = errors.New("Threads search rate limited; remaining queries skipped")
 var errOffTopicSearch = errors.New("Threads returned posts unrelated to the requested service topic")
 
@@ -121,6 +119,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		queries = nil
 	}
 	succeeded, failed, skipped := 0, 0, 0
+	staleRejected := 0
 	var scanErr error
 	for _, query := range queries {
 		count := 0
@@ -137,6 +136,10 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 				break
 			}
 			if strings.TrimSpace(result.ID) == "" || strings.TrimSpace(result.Text) == "" {
+				continue
+			}
+			if !withinPostAge(result.Timestamp, time.Now()) {
+				staleRejected++
 				continue
 			}
 			if !queryTopicMatches(query, result.Text) {
@@ -187,18 +190,35 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		if len(batch) == 0 {
 			break
 		}
+		// Re-check timestamps before any model call, including rows already queued
+		// in storage. Stale records are closed without exposing their text to Groq.
+		freshBatch := make([]threads.SearchResult, 0, len(batch))
+		for _, post := range batch {
+			if withinPostAge(post.Timestamp, time.Now()) {
+				freshBatch = append(freshBatch, post)
+				continue
+			}
+			staleRejected++
+			if err := w.store.SaveAssessment(ctx, Assessment{PostID: post.ID, Qualified: false, Category: "none", Reason: "post is outside the 48-hour lead window"}); err != nil {
+				return fmt.Errorf("close stale post without classification: %w", err)
+			}
+		}
+		if len(freshBatch) == 0 {
+			remaining -= len(batch)
+			continue
+		}
 		// Count attempts too: repeated ingest requests or provider errors must not
 		// spend more than the existing 20-post budget per 15 minutes.
-		w.budgetRemaining -= len(batch)
-		assessments, err := w.analyzer.Analyze(ctx, batch, w.offer)
+		w.budgetRemaining -= len(freshBatch)
+		assessments, err := w.analyzer.Analyze(ctx, freshBatch, w.offer)
 		if err != nil {
 			return fmt.Errorf("classify posts: %w", err)
 		}
-		if err := validateAssessments(batch, assessments); err != nil {
+		if err := validateAssessments(freshBatch, assessments); err != nil {
 			return err
 		}
-		postedAtByID := make(map[string]time.Time, len(batch))
-		for _, post := range batch {
+		postedAtByID := make(map[string]time.Time, len(freshBatch))
+		for _, post := range freshBatch {
 			postedAtByID[post.ID] = post.Timestamp
 		}
 		for _, assessment := range assessments {
@@ -206,11 +226,12 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 				assessment.Qualified = false
 			}
 			postedAt := postedAtByID[assessment.PostID]
-			if !postedAt.IsZero() && time.Since(postedAt) > maxLeadAge {
+			if !withinPostAge(postedAt, time.Now()) {
 				assessment.Qualified = false
 				assessment.Category = "none"
-				assessment.Draft = ""
-				assessment.Reason = "post is older than the 30-day lead window"
+				assessment.DMDraft = ""
+				assessment.CommentDraft = ""
+				assessment.Reason = "post is outside the 48-hour lead window"
 			}
 			if assessment.Score < 0 {
 				assessment.Score = 0
@@ -223,20 +244,28 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			}
 		}
 		remaining -= len(batch)
-		classified += len(batch)
+		classified += len(freshBatch)
 	}
 
 	pending, err := w.store.PendingNotifications(ctx, maxNewPerCycle)
 	if err != nil {
 		return fmt.Errorf("load leads to notify: %w", err)
 	}
+	notifications := 0
 	for _, lead := range pending {
-		if err := w.notifier.Send(ctx, formatTelegramLead(lead)); err != nil {
+		// A lead can cross the age boundary after the store query. Re-check just
+		// before sending so the Telegram inbox never receives an expired post.
+		if !withinPostAge(lead.Timestamp, time.Now()) {
+			staleRejected++
+			continue
+		}
+		if err := w.notifier.Send(ctx, lead); err != nil {
 			return fmt.Errorf("send Telegram notification: %w", err)
 		}
 		if err := w.store.MarkNotified(ctx, lead.ID); err != nil {
 			return fmt.Errorf("mark lead notified: %w", err)
 		}
+		notifications++
 		if len(pending) > 1 {
 			timer := time.NewTimer(3 * time.Second)
 			select {
@@ -256,11 +285,19 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		if scanErr == nil {
 			scanErr = fmt.Errorf("Threads search failed for %d of %d queries", failed, len(queries))
 		}
-	} else if len(collected) == 0 && classified == 0 && len(pending) == 0 {
+	} else if len(collected) == 0 && classified == 0 && notifications == 0 {
 		status = "empty"
 	}
-	w.logger.Info("lead scan cycle finished", "status", status, "ingest_only", w.ingestOnly, "queries", len(queries), "queries_succeeded", succeeded, "queries_failed", failed, "queries_skipped", skipped, "posts_seen", len(collected), "new_posts", len(newPosts), "classified", classified, "notifications", len(pending), "classification_budget_remaining", w.budgetRemaining)
+	w.logger.Info("lead scan cycle finished", "status", status, "ingest_only", w.ingestOnly, "queries", len(queries), "queries_succeeded", succeeded, "queries_failed", failed, "queries_skipped", skipped, "posts_seen", len(collected), "stale_rejected", staleRejected, "new_posts", len(newPosts), "classified", classified, "notifications", notifications, "classification_budget_remaining", w.budgetRemaining)
 	return scanErr
+}
+
+func withinPostAge(postedAt, now time.Time) bool {
+	if postedAt.IsZero() {
+		return false
+	}
+	age := now.Sub(postedAt)
+	return age <= MaxPostAge && age >= -5*time.Minute
 }
 
 func validateAssessments(posts []threads.SearchResult, assessments []Assessment) error {

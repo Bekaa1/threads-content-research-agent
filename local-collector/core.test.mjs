@@ -10,6 +10,9 @@ test('rotation and bounded fresh deduplication',()=>{
   assert.deepEqual(selectQueries(['a','b','c'],2),['c','a','b']);
   const p={permalink:'https://www.threads.com/@buyer/post/Ddv8MUkGt1S',text:'Need a website',posted_at:new Date().toISOString()};
   assert.equal(freshPosts([p,p,{...p,permalink:'x',posted_at:'invalid'},{...p,permalink:'y',posted_at:'2000-01-01'}]).length,1);
+  const now=Date.now();
+  assert.equal(freshPosts([{...p,posted_at:new Date(now-47*60*60*1000).toISOString()}],now).length,1);
+  assert.equal(freshPosts([{...p,posted_at:new Date(now-49*60*60*1000).toISOString()}],now).length,0);
   assert.equal(freshPosts(Array.from({length:20},(_,i)=>({...p,permalink:String(i)}))).length,5);
 });
 test('only secure explicit endpoints and conservative schedule',()=>{

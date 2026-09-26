@@ -9,9 +9,11 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type TelegramNotifier struct {
@@ -30,12 +32,76 @@ func NewTelegramNotifier(token, chatID string, client *http.Client) (*TelegramNo
 	return &TelegramNotifier{token: strings.TrimSpace(token), chatID: strings.TrimSpace(chatID), client: client}, nil
 }
 
-func (n *TelegramNotifier) Send(ctx context.Context, text string) error {
-	return n.send(ctx, text, true)
+func (n *TelegramNotifier) Send(ctx context.Context, lead Lead) error {
+	return n.send(ctx, formatTelegramLead(lead), leadReplyMarkup(lead), true)
 }
 
-func (n *TelegramNotifier) send(ctx context.Context, text string, allowMigration bool) error {
-	payload, err := json.Marshal(map[string]any{"chat_id": n.chatID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true})
+type telegramCopyText struct {
+	Text string `json:"text"`
+}
+
+type telegramInlineButton struct {
+	Text     string            `json:"text"`
+	URL      string            `json:"url,omitempty"`
+	CopyText *telegramCopyText `json:"copy_text,omitempty"`
+}
+
+type telegramInlineKeyboard struct {
+	InlineKeyboard [][]telegramInlineButton `json:"inline_keyboard"`
+}
+
+func leadReplyMarkup(lead Lead) *telegramInlineKeyboard {
+	var links []telegramInlineButton
+	if validThreadsPostURL(lead.Permalink) {
+		links = append(links, telegramInlineButton{Text: "Открыть пост", URL: lead.Permalink})
+	}
+	if validThreadsUsername(lead.Username) {
+		profileURL := (&url.URL{Scheme: "https", Host: "www.threads.com", Path: "/@" + lead.Username}).String()
+		links = append(links, telegramInlineButton{Text: "Профиль", URL: profileURL})
+	}
+	var rows [][]telegramInlineButton
+	if len(links) > 0 {
+		rows = append(rows, links)
+	}
+	var copies []telegramInlineButton
+	if draft := strings.TrimSpace(lead.DMDraft); draft != "" && utf8.RuneCountInString(draft) <= 256 {
+		copies = append(copies, telegramInlineButton{Text: "Скопировать ЛС", CopyText: &telegramCopyText{Text: draft}})
+	}
+	if draft := strings.TrimSpace(lead.CommentDraft); draft != "" && utf8.RuneCountInString(draft) <= 256 {
+		copies = append(copies, telegramInlineButton{Text: "Скопировать комментарий", CopyText: &telegramCopyText{Text: draft}})
+	}
+	if len(copies) > 0 {
+		rows = append(rows, copies)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return &telegramInlineKeyboard{InlineKeyboard: rows}
+}
+
+func validThreadsPostURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && (u.Host == "www.threads.com" || u.Host == "threads.com") && u.User == nil && strings.Contains(u.Path, "/post/")
+}
+
+func validThreadsUsername(username string) bool {
+	if len(username) < 1 || len(username) > 40 {
+		return false
+	}
+	for _, r := range username {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func (n *TelegramNotifier) send(ctx context.Context, text string, markup *telegramInlineKeyboard, allowMigration bool) error {
+	payloadFields := map[string]any{"chat_id": n.chatID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true}
+	if markup != nil {
+		payloadFields["reply_markup"] = markup
+	}
+	payload, err := json.Marshal(payloadFields)
 	if err != nil {
 		return errors.New("could not encode Telegram message")
 	}
@@ -65,7 +131,7 @@ func (n *TelegramNotifier) send(ctx context.Context, text string, allowMigration
 		// not a new recipient. Follow once; leave the lead pending on any failure.
 		if resp.StatusCode == http.StatusBadRequest && allowMigration && result.Parameters.MigrateToChatID < 0 {
 			n.chatID = strconv.FormatInt(result.Parameters.MigrateToChatID, 10)
-			return n.send(ctx, text, false)
+			return n.send(ctx, text, markup, false)
 		}
 		return fmt.Errorf("Telegram returned HTTP %d (%s)", resp.StatusCode, telegramErrorCategory(resp.StatusCode, result.Description))
 	}
@@ -128,8 +194,11 @@ func formatTelegramLead(lead Lead) string {
 	if reason := strings.TrimSpace(lead.Reason); reason != "" {
 		lines = append(lines, "", "Почему подходит: "+html.EscapeString(reason))
 	}
-	if draft := strings.TrimSpace(lead.Draft); draft != "" {
-		lines = append(lines, "", "<b>Черновик (отправить вручную):</b>", html.EscapeString(draft))
+	if draft := strings.TrimSpace(lead.DMDraft); draft != "" {
+		lines = append(lines, "", "<b>ЛС — черновик (проверить и отправить вручную):</b>", html.EscapeString(draft))
+	}
+	if draft := strings.TrimSpace(lead.CommentDraft); draft != "" {
+		lines = append(lines, "", "<b>Комментарий — черновик (проверить и отправить вручную):</b>", html.EscapeString(draft))
 	}
 	message := strings.Join(lines, "\n")
 	if len([]rune(message)) > 3900 {
