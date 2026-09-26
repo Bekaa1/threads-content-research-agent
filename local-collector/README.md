@@ -36,3 +36,5 @@ Only public permalink, text, post date, and source query are uploaded. Failed up
 Login/checkpoint/CAPTCHA waits for a human; HTTP 429 causes a 60-minute cooldown. Other errors stop that cycle. There is no anti-bot evasion, fingerprint spoofing, proxy rotation or CAPTCHA solver. Browser automation can still be restricted by Threads and is not a guarantee against account limits.
 
 `.state/` contains credentials and browser session material. It is excluded from Git **and** Docker context. Keep it private. To move computers, create a new independent login rather than uploading this folder.
+
+Uploads use system DNS first, with a Cloudflare `1.1.1.1` DNS-only fallback on name-resolution failure. HTTPS certificate validation remains enabled and redirects are not followed. This does not change Windows network settings; no cookies or keys are sent to the DNS resolver.

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { DEFAULT_QUERIES, validateConfig, selectQueries, freshPosts, renderReport } from './core.mjs';
 import { readSearchDOM } from './dom.mjs';
+import { uploadBatch } from './upload.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const stateDir = join(root, '.state');
@@ -69,12 +70,7 @@ async function wait(ms) {
 }
 async function flush() {
   for (const batch of [...runtime.outbox]) {
-    let response;
-    try {
-      response = await fetch(cfg.endpoint,{method:'POST',headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},body:JSON.stringify(batch),redirect:'error',signal:AbortSignal.timeout(20000)});
-    } catch { throw new Error('upload_network_error'); }
-    if (!response.ok) throw new Error(`upload_http_${response.status}`);
-    const result = await response.json();
+    const result = await uploadBatch(cfg.endpoint,cfg.key,batch);
     if (!Number.isInteger(result.stored) || !Number.isInteger(result.accepted)) throw new Error('upload_invalid_response');
     runtime.outbox.shift();
     await save('runtime.json',runtime);
