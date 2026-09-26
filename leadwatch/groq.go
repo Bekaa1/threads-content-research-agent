@@ -16,6 +16,14 @@ import (
 
 const groqEndpoint = "https://api.groq.com/openai/v1/chat/completions"
 
+const groqBatchSize = 2
+
+var (
+	errGroqIncompleteResultSet = errors.New("Groq returned an incomplete result set")
+	errGroqInvalidLeadJSON     = errors.New("Groq returned invalid lead JSON")
+	errGroqInvalidLeadSet      = errors.New("Groq returned an invalid lead set")
+)
+
 type GroqAnalyzer struct {
 	apiKey string
 	model  string
@@ -36,6 +44,87 @@ func (a *GroqAnalyzer) Analyze(ctx context.Context, posts []threads.SearchResult
 	if len(posts) == 0 {
 		return nil, nil
 	}
+	assessments := make([]Assessment, 0, len(posts))
+	for start := 0; start < len(posts); start += groqBatchSize {
+		end := min(start+groqBatchSize, len(posts))
+		batch, err := a.analyzeBatch(ctx, posts[start:end], offer)
+		if err != nil {
+			return nil, err
+		}
+		assessments = append(assessments, batch...)
+	}
+	return assessments, nil
+}
+
+func (a *GroqAnalyzer) analyzeBatch(ctx context.Context, posts []threads.SearchResult, offer string) ([]Assessment, error) {
+	assessments, err := a.analyzeRequest(ctx, posts, offer)
+	if err != nil {
+		if len(posts) > 1 && (errors.Is(err, errGroqInvalidLeadJSON) || errors.Is(err, errGroqInvalidLeadSet)) {
+			return a.analyzeIndividually(ctx, posts, offer)
+		}
+		return nil, err
+	}
+
+	expected := make(map[string]struct{}, len(posts))
+	for _, post := range posts {
+		expected[post.ID] = struct{}{}
+	}
+	byID := make(map[string]Assessment, len(assessments))
+	for _, assessment := range assessments {
+		if _, ok := expected[assessment.PostID]; !ok {
+			if len(posts) == 1 {
+				return nil, errGroqInvalidLeadSet
+			}
+			return a.analyzeIndividually(ctx, posts, offer)
+		}
+		if _, duplicate := byID[assessment.PostID]; duplicate {
+			if len(posts) == 1 {
+				return nil, errGroqInvalidLeadSet
+			}
+			return a.analyzeIndividually(ctx, posts, offer)
+		}
+		byID[assessment.PostID] = assessment
+	}
+
+	missing := make([]threads.SearchResult, 0, len(posts)-len(byID))
+	for _, post := range posts {
+		if _, ok := byID[post.ID]; !ok {
+			missing = append(missing, post)
+		}
+	}
+	if len(missing) > 0 {
+		if len(posts) == 1 {
+			return nil, errGroqIncompleteResultSet
+		}
+		for _, post := range missing {
+			retry, err := a.analyzeBatch(ctx, []threads.SearchResult{post}, offer)
+			if err != nil {
+				return nil, err
+			}
+			byID[post.ID] = retry[0]
+		}
+	}
+
+	ordered := make([]Assessment, 0, len(posts))
+	for _, post := range posts {
+		ordered = append(ordered, byID[post.ID])
+	}
+	return ordered, nil
+}
+
+func (a *GroqAnalyzer) analyzeIndividually(ctx context.Context, posts []threads.SearchResult, offer string) ([]Assessment, error) {
+	assessments := make([]Assessment, 0, len(posts))
+	for _, post := range posts {
+		assessment, err := a.analyzeBatch(ctx, []threads.SearchResult{post}, offer)
+		if err != nil {
+			return nil, err
+		}
+		assessments = append(assessments, assessment[0])
+	}
+	return assessments, nil
+}
+
+func (a *GroqAnalyzer) analyzeRequest(ctx context.Context, posts []threads.SearchResult, offer string) ([]Assessment, error) {
 	input := make([]map[string]string, 0, len(posts))
 	for _, post := range posts {
 		text := post.Text
@@ -60,7 +149,7 @@ func (a *GroqAnalyzer) Analyze(ctx context.Context, posts []threads.SearchResult
 		"model":                 a.model,
 		"messages":              []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": string(user)}},
 		"temperature":           0,
-		"max_completion_tokens": 2400,
+		"max_completion_tokens": 1200,
 		"response_format":       map[string]string{"type": "json_object"},
 	})
 	if err != nil {
@@ -98,7 +187,7 @@ func (a *GroqAnalyzer) Analyze(ctx context.Context, posts []threads.SearchResult
 		Leads []Assessment `json:"leads"`
 	}
 	if err := json.Unmarshal([]byte(envelope.Choices[0].Message.Content), &result); err != nil {
-		return nil, errors.New("Groq returned invalid lead JSON")
+		return nil, errGroqInvalidLeadJSON
 	}
 	for i := range result.Leads {
 		result.Leads[i].PostID = strings.TrimSpace(result.Leads[i].PostID)
@@ -109,9 +198,6 @@ func (a *GroqAnalyzer) Analyze(ctx context.Context, posts []threads.SearchResult
 			result.Leads[i].Category = "none"
 			result.Leads[i].Draft = ""
 		}
-	}
-	if len(result.Leads) != len(posts) {
-		return nil, errors.New("Groq returned an incomplete result set")
 	}
 	return result.Leads, nil
 }
