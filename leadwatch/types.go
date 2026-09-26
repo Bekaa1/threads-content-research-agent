@@ -3,6 +3,7 @@ package leadwatch
 import (
 	"context"
 	"iter"
+	"time"
 
 	"github.com/Egor01KKK/threads-content-research-agent/threads"
 )
@@ -23,6 +24,21 @@ type Assessment struct {
 type Lead struct {
 	threads.SearchResult
 	Assessment
+}
+
+// ScannedPost is the minimal, non-secret view exposed by the read-only
+// diagnostic endpoint. It intentionally omits model prompts and reply drafts.
+type ScannedPost struct {
+	PostID     string     `json:"post_id"`
+	Query      string     `json:"query"`
+	Text       string     `json:"text"`
+	Username   string     `json:"username"`
+	Permalink  string     `json:"permalink"`
+	PostedAt   *time.Time `json:"posted_at,omitempty"`
+	SearchedAt time.Time  `json:"searched_at"`
+	Qualified  *bool      `json:"qualified,omitempty"`
+	Score      *int       `json:"score,omitempty"`
+	Category   string     `json:"category"`
 }
 
 type Analyzer interface {

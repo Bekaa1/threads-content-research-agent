@@ -75,6 +75,7 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.Handle("GET /admin/posts", recentPostsHandler(cfg.ReadAPIKey, store))
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	serverErr := make(chan error, 1)
 	go func() {

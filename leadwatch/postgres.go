@@ -101,6 +101,43 @@ func (s *PostgresStore) Unclassified(ctx context.Context, limit int) ([]threads.
 	return posts, rows.Err()
 }
 
+func (s *PostgresStore) RecentPosts(ctx context.Context, limit int) ([]ScannedPost, error) {
+	if limit < 1 || limit > 5 {
+		return nil, errors.New("recent post limit must be between 1 and 5")
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,post_text,username,permalink,posted_at,searched_at,qualified,score,category
+		FROM leadwatch_posts ORDER BY searched_at DESC, created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	posts := make([]ScannedPost, 0, limit)
+	for rows.Next() {
+		var post ScannedPost
+		var postedAt sql.NullTime
+		var qualified sql.NullBool
+		var score sql.NullInt64
+		if err := rows.Scan(&post.PostID, &post.Query, &post.Text, &post.Username, &post.Permalink, &postedAt, &post.SearchedAt, &qualified, &score, &post.Category); err != nil {
+			return nil, err
+		}
+		if postedAt.Valid {
+			value := postedAt.Time
+			post.PostedAt = &value
+		}
+		if qualified.Valid {
+			value := qualified.Bool
+			post.Qualified = &value
+		}
+		if score.Valid {
+			value := int(score.Int64)
+			post.Score = &value
+		}
+		posts = append(posts, post)
+	}
+	return posts, rows.Err()
+}
+
 func (s *PostgresStore) SaveAssessment(ctx context.Context, a Assessment) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE leadwatch_posts SET qualified=$2,score=$3,category=$4,reason=$5,draft=$6,classified_at=NOW() WHERE post_id=$1 AND classified_at IS NULL`, a.PostID, a.Qualified, a.Score, a.Category, a.Reason, a.Draft)
 	if err != nil {

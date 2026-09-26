@@ -38,6 +38,7 @@ type Config struct {
 	Queries      []string
 	Interval     time.Duration
 	Port         string
+	ReadAPIKey   string
 }
 
 func ConfigFromEnv() (Config, error) {
@@ -49,6 +50,7 @@ func ConfigFromEnv() (Config, error) {
 		TelegramChat: strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")),
 		OfferProfile: strings.TrimSpace(os.Getenv("LEADS_OFFER_PROFILE")),
 		Port:         strings.TrimSpace(os.Getenv("PORT")),
+		ReadAPIKey:   strings.TrimSpace(os.Getenv("LEADWATCH_READ_API_KEY")),
 	}
 	if cfg.GroqModel == "" {
 		cfg.GroqModel = defaultGroqModel
