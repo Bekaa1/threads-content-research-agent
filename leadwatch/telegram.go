@@ -9,6 +9,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -30,6 +31,10 @@ func NewTelegramNotifier(token, chatID string, client *http.Client) (*TelegramNo
 }
 
 func (n *TelegramNotifier) Send(ctx context.Context, text string) error {
+	return n.send(ctx, text, true)
+}
+
+func (n *TelegramNotifier) send(ctx context.Context, text string, allowMigration bool) error {
 	payload, err := json.Marshal(map[string]any{"chat_id": n.chatID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true})
 	if err != nil {
 		return errors.New("could not encode Telegram message")
@@ -46,15 +51,52 @@ func (n *TelegramNotifier) Send(ctx context.Context, text string) error {
 	}
 	defer resp.Body.Close()
 	var result struct {
-		OK bool `json:"ok"`
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Parameters  struct {
+			MigrateToChatID int64 `json:"migrate_to_chat_id"`
+		} `json:"parameters"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&result); err != nil {
 		return errors.New("Telegram returned an invalid response")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !result.OK {
-		return fmt.Errorf("Telegram returned HTTP %d", resp.StatusCode)
+		// A Telegram-confirmed group->supergroup migration is the same inbox,
+		// not a new recipient. Follow once; leave the lead pending on any failure.
+		if resp.StatusCode == http.StatusBadRequest && allowMigration && result.Parameters.MigrateToChatID < 0 {
+			n.chatID = strconv.FormatInt(result.Parameters.MigrateToChatID, 10)
+			return n.send(ctx, text, false)
+		}
+		return fmt.Errorf("Telegram returned HTTP %d (%s)", resp.StatusCode, telegramErrorCategory(resp.StatusCode, result.Description))
 	}
 	return nil
+}
+
+// Never log raw API responses: return only an allowlisted diagnostic category.
+func telegramErrorCategory(code int, description string) string {
+	d := strings.ToLower(description)
+	switch {
+	case strings.Contains(d, "chat not found"):
+		return "chat_not_found"
+	case strings.Contains(d, "bot was kicked"):
+		return "bot_removed"
+	case strings.Contains(d, "not enough rights"), strings.Contains(d, "chat_write_forbidden"):
+		return "missing_write_permission"
+	case strings.Contains(d, "parse entities"):
+		return "invalid_html"
+	case strings.Contains(d, "message is too long"):
+		return "message_too_long"
+	case strings.Contains(d, "migrat"):
+		return "chat_migrated"
+	case code == 401:
+		return "invalid_bot_token"
+	case code == 403:
+		return "forbidden"
+	case code == 429:
+		return "rate_limited"
+	default:
+		return "request_rejected"
+	}
 }
 
 func formatTelegramLead(lead Lead) string {
