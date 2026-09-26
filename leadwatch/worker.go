@@ -68,7 +68,7 @@ func (w *Worker) Run(ctx context.Context, interval time.Duration) error {
 			w.logger.Error("lead scan cycle failed", "error", err)
 		}
 		delay = nextScanDelay(interval, delay, err)
-		w.logger.Info("next lead scan scheduled", "delay_minutes", int(delay.Minutes()))
+		w.logger.Info("next lead scan scheduled", "delay_seconds", int(delay.Round(time.Second).Seconds()))
 		timer := time.NewTimer(delay)
 		if errors.Is(err, errGroqRateLimited) {
 			select {

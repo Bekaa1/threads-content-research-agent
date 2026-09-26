@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Egor01KKK/threads-content-research-agent/threads"
@@ -17,7 +18,10 @@ import (
 
 const groqEndpoint = "https://api.groq.com/openai/v1/chat/completions"
 
-const groqBatchSize = 2
+const (
+	groqBatchSize          = 2
+	groqMinRequestInterval = 15 * time.Second
+)
 
 var (
 	errGroqIncompleteResultSet = errors.New("Groq returned an incomplete result set")
@@ -40,9 +44,11 @@ func (e *groqRateLimitError) Error() string {
 func (e *groqRateLimitError) Unwrap() error { return errGroqRateLimited }
 
 type GroqAnalyzer struct {
-	apiKey string
-	model  string
-	client *http.Client
+	apiKey      string
+	model       string
+	client      *http.Client
+	paceMu      sync.Mutex
+	nextRequest time.Time
 }
 
 func NewGroqAnalyzer(apiKey, model string, client *http.Client) (*GroqAnalyzer, error) {
@@ -176,6 +182,9 @@ func (a *GroqAnalyzer) analyzeRequest(ctx context.Context, posts []threads.Searc
 	}
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	if err := a.waitForRateSlot(ctx); err != nil {
+		return nil, err
+	}
 	resp, err := a.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Groq request failed (%s)", classifyNetworkError(err))
@@ -218,6 +227,28 @@ func (a *GroqAnalyzer) analyzeRequest(ctx context.Context, posts []threads.Searc
 		}
 	}
 	return result.Leads, nil
+}
+
+func (a *GroqAnalyzer) waitForRateSlot(ctx context.Context) error {
+	a.paceMu.Lock()
+	now := time.Now()
+	next := now
+	if a.nextRequest.After(now) {
+		next = a.nextRequest
+	}
+	a.nextRequest = next.Add(groqMinRequestInterval)
+	a.paceMu.Unlock()
+
+	if delay := time.Until(next); delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil
 }
 
 func groqRetryAfter(headers http.Header, now time.Time) time.Duration {
