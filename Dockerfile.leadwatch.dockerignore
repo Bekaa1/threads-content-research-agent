@@ -1,0 +1,8 @@
+.git/
+artifacts/
+viewer/
+docs/
+research/
+cli/
+scripts/
+examples/
