@@ -24,6 +24,8 @@
 *.sqlite3
 *.jsonl
 *.log
+node_modules/
+/local-collector/.state/
 coverage.out
 
 # Local configuration and development environments

@@ -6,19 +6,25 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Egor01KKK/threads-content-research-agent/threads"
 )
 
 type Worker struct {
-	searcher Searcher
-	analyzer Analyzer
-	notifier Notifier
-	store    Store
-	queries  []string
-	offer    string
-	logger   *slog.Logger
+	searcher        Searcher
+	analyzer        Analyzer
+	notifier        Notifier
+	store           Store
+	queries         []string
+	offer           string
+	logger          *slog.Logger
+	ingestOnly      bool
+	wake            chan struct{}
+	runMu           sync.Mutex
+	budgetReset     time.Time
+	budgetRemaining int
 }
 
 const maxLeadAge = 30 * 24 * time.Hour
@@ -36,7 +42,16 @@ func NewWorker(searcher Searcher, analyzer Analyzer, notifier Notifier, store St
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Worker{searcher: searcher, analyzer: analyzer, notifier: notifier, store: store, queries: append([]string(nil), queries...), offer: offer, logger: logger}, nil
+	return &Worker{searcher: searcher, analyzer: analyzer, notifier: notifier, store: store, queries: append([]string(nil), queries...), offer: offer, logger: logger, wake: make(chan struct{}, 1)}, nil
+}
+
+// Call before Run starts. Browser mode never makes anonymous Threads requests.
+func (w *Worker) UseIngestOnly() { w.ingestOnly = true }
+func (w *Worker) Trigger() {
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
 }
 
 func (w *Worker) Run(ctx context.Context, interval time.Duration) error {
@@ -60,6 +75,8 @@ func (w *Worker) Run(ctx context.Context, interval time.Duration) error {
 			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
+		case <-w.wake:
+			timer.Stop()
 		}
 	}
 }
@@ -72,10 +89,20 @@ func nextScanDelay(interval, previous time.Duration, err error) time.Duration {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) error {
+	w.runMu.Lock()
+	defer w.runMu.Unlock()
+	if time.Since(w.budgetReset) >= 15*time.Minute {
+		w.budgetReset = time.Now()
+		w.budgetRemaining = maxNewPerCycle
+	}
 	var collected []threads.SearchResult
+	queries := w.queries
+	if w.ingestOnly {
+		queries = nil
+	}
 	succeeded, failed, skipped := 0, 0, 0
 	var scanErr error
-	for _, query := range w.queries {
+	for _, query := range queries {
 		count := 0
 		offTopic := 0
 		var queryErr error
@@ -121,7 +148,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		w.logger.Info("Threads query result", "query", query, "status", status, "verified_posts", count, "off_topic_rejected", offTopic)
 		if threads.Code(queryErr) == threads.ExitRateLimit {
 			scanErr = errSearchRateLimited
-			skipped = len(w.queries) - succeeded - failed
+			skipped = len(queries) - succeeded - failed
 			break
 		}
 	}
@@ -130,7 +157,8 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		return fmt.Errorf("store newly found posts: %w", err)
 	}
 
-	remaining := maxNewPerCycle
+	remaining := w.budgetRemaining
+	classified := 0
 	for remaining > 0 {
 		batch, err := w.store.Unclassified(ctx, min(maxBatchSize, remaining))
 		if err != nil {
@@ -139,6 +167,9 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		if len(batch) == 0 {
 			break
 		}
+		// Count attempts too: repeated ingest requests or provider errors must not
+		// spend more than the existing 20-post budget per 15 minutes.
+		w.budgetRemaining -= len(batch)
 		assessments, err := w.analyzer.Analyze(ctx, batch, w.offer)
 		if err != nil {
 			return fmt.Errorf("classify posts: %w", err)
@@ -172,6 +203,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			}
 		}
 		remaining -= len(batch)
+		classified += len(batch)
 	}
 
 	pending, err := w.store.PendingNotifications(ctx, maxNewPerCycle)
@@ -202,12 +234,12 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			status = "unavailable"
 		}
 		if scanErr == nil {
-			scanErr = fmt.Errorf("Threads search failed for %d of %d queries", failed, len(w.queries))
+			scanErr = fmt.Errorf("Threads search failed for %d of %d queries", failed, len(queries))
 		}
-	} else if len(collected) == 0 {
+	} else if len(collected) == 0 && classified == 0 && len(pending) == 0 {
 		status = "empty"
 	}
-	w.logger.Info("lead scan cycle finished", "status", status, "queries", len(w.queries), "queries_succeeded", succeeded, "queries_failed", failed, "queries_skipped", skipped, "posts_seen", len(collected), "new_posts", len(newPosts), "notifications", len(pending))
+	w.logger.Info("lead scan cycle finished", "status", status, "ingest_only", w.ingestOnly, "queries", len(queries), "queries_succeeded", succeeded, "queries_failed", failed, "queries_skipped", skipped, "posts_seen", len(collected), "new_posts", len(newPosts), "classified", classified, "notifications", len(pending), "classification_budget_remaining", w.budgetRemaining)
 	return scanErr
 }
 

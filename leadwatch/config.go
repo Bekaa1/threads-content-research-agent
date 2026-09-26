@@ -29,28 +29,41 @@ var defaultQueries = []string{
 }
 
 type Config struct {
-	DatabaseURL  string
-	GroqAPIKey   string
-	GroqModel    string
-	TelegramBot  string
-	TelegramChat string
-	OfferProfile string
-	Queries      []string
-	Interval     time.Duration
-	Port         string
-	ReadAPIKey   string
+	DatabaseURL    string
+	GroqAPIKey     string
+	GroqModel      string
+	TelegramBot    string
+	TelegramChat   string
+	OfferProfile   string
+	Queries        []string
+	Interval       time.Duration
+	Port           string
+	ReadAPIKey     string
+	IngestAPIKey   string
+	CollectionMode string
 }
 
 func ConfigFromEnv() (Config, error) {
 	cfg := Config{
-		DatabaseURL:  strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		GroqAPIKey:   strings.TrimSpace(os.Getenv("GROQ_API_KEY")),
-		GroqModel:    strings.TrimSpace(os.Getenv("GROQ_MODEL")),
-		TelegramBot:  strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
-		TelegramChat: strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")),
-		OfferProfile: strings.TrimSpace(os.Getenv("LEADS_OFFER_PROFILE")),
-		Port:         strings.TrimSpace(os.Getenv("PORT")),
-		ReadAPIKey:   strings.TrimSpace(os.Getenv("LEADWATCH_READ_API_KEY")),
+		DatabaseURL:    strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		GroqAPIKey:     strings.TrimSpace(os.Getenv("GROQ_API_KEY")),
+		GroqModel:      strings.TrimSpace(os.Getenv("GROQ_MODEL")),
+		TelegramBot:    strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
+		TelegramChat:   strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")),
+		OfferProfile:   strings.TrimSpace(os.Getenv("LEADS_OFFER_PROFILE")),
+		Port:           strings.TrimSpace(os.Getenv("PORT")),
+		ReadAPIKey:     strings.TrimSpace(os.Getenv("LEADWATCH_READ_API_KEY")),
+		IngestAPIKey:   strings.TrimSpace(os.Getenv("LEADWATCH_INGEST_API_KEY")),
+		CollectionMode: strings.TrimSpace(os.Getenv("LEADWATCH_COLLECTION_MODE")),
+	}
+	if cfg.CollectionMode == "" {
+		cfg.CollectionMode = "anonymous"
+	}
+	if cfg.CollectionMode != "anonymous" && cfg.CollectionMode != "ingest" {
+		return Config{}, errors.New("LEADWATCH_COLLECTION_MODE must be anonymous or ingest")
+	}
+	if cfg.CollectionMode == "ingest" && len(cfg.IngestAPIKey) < 32 {
+		return Config{}, errors.New("LEADWATCH_INGEST_API_KEY must contain at least 32 characters in ingest mode")
 	}
 	if cfg.GroqModel == "" {
 		cfg.GroqModel = defaultGroqModel

@@ -88,11 +88,13 @@ func TestPostgresSearchProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	post.ID = "legacy"
+	post.Source = threads.SearchSourceBrowser
+	post.Timestamp = time.Now().UTC().Truncate(time.Second)
 	if inserted, err := store.InsertNew(ctx, []threads.SearchResult{post}); err != nil || len(inserted) != 1 {
 		t.Fatalf("legacy upgrade: %v %v", inserted, err)
 	}
 	posts, err = store.Unclassified(ctx, 10)
-	if err != nil || len(posts) != 1 || posts[0].ID != "legacy" {
+	if err != nil || len(posts) != 1 || posts[0].ID != "legacy" || posts[0].Source != threads.SearchSourceBrowser || !posts[0].Timestamp.Equal(post.Timestamp) || posts[0].Username != "buyer" {
 		t.Fatalf("legacy not reclassified: %+v %v", posts, err)
 	}
 	if err := store.SaveAssessment(ctx, Assessment{PostID: "legacy", Qualified: true, Score: 90, Category: "crm"}); err != nil {

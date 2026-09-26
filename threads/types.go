@@ -103,11 +103,12 @@ type SearchResult struct {
 const (
 	SearchSourceSSR     = "threads_search_ssr"
 	SearchSourceGraphQL = "threads_search_graphql"
+	SearchSourceBrowser = "threads_browser_search"
 )
 
 // VerifiedSearch reports structural provenance, not semantic relevance or buyer intent.
 func (r SearchResult) VerifiedSearch() bool {
-	return r.Source == SearchSourceSSR || r.Source == SearchSourceGraphQL
+	return r.Source == SearchSourceSSR || r.Source == SearchSourceGraphQL || r.Source == SearchSourceBrowser
 }
 
 // asReply converts a parsed post (a reply lives in the same thread_items shape

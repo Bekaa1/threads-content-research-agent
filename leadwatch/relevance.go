@@ -57,3 +57,6 @@ func queryTopicMatches(query, text string) bool {
 	}
 	return false
 }
+
+// MatchesQueryTopic applies the same sanity check to trusted local browser input.
+func MatchesQueryTopic(query, text string) bool { return queryTopicMatches(query, text) }

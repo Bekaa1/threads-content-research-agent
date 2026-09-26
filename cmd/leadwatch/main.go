@@ -69,6 +69,9 @@ func main() {
 		logger.Error("could not initialize lead worker", "error", err)
 		os.Exit(1)
 	}
+	if cfg.CollectionMode == "ingest" {
+		worker.UseIngestOnly()
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -76,14 +79,17 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.Handle("GET /admin/posts", recentPostsHandler(cfg.ReadAPIKey, store))
-	server := &http.Server{Addr: ":" + cfg.Port, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	if cfg.CollectionMode == "ingest" {
+		mux.Handle("POST /ingest/posts", ingestPostsHandler(cfg.IngestAPIKey, store, worker.Trigger, logger))
+	}
+	server := &http.Server{Addr: ":" + cfg.Port, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	serverErr := make(chan error, 1)
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
 	}()
-	logger.Info("lead worker started", "interval_minutes", int(cfg.Interval.Minutes()), "queries", len(cfg.Queries), "port", cfg.Port)
+	logger.Info("lead worker started", "interval_minutes", int(cfg.Interval.Minutes()), "queries", len(cfg.Queries), "port", cfg.Port, "collection_mode", cfg.CollectionMode)
 
 	workerErr := make(chan error, 1)
 	go func() { workerErr <- worker.Run(ctx, cfg.Interval) }()

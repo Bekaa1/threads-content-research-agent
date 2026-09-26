@@ -60,6 +60,7 @@ func (s *PostgresStore) InsertNew(ctx context.Context, posts []threads.SearchRes
 		VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7::timestamptz,'0001-01-01 00:00:00+00'),$8,$9,$10)
 		ON CONFLICT (post_id) DO UPDATE SET
 		query=EXCLUDED.query,post_text=EXCLUDED.post_text,source=EXCLUDED.source,source_url=EXCLUDED.source_url,
+		posted_at=EXCLUDED.posted_at,shortcode=EXCLUDED.shortcode,username=EXCLUDED.username,permalink=EXCLUDED.permalink,
 		searched_at=EXCLUDED.searched_at,classified_at=NULL,qualified=NULL,score=NULL,category='',reason='',draft=''
 		WHERE leadwatch_posts.source=''`
 	for _, post := range posts {
@@ -91,7 +92,7 @@ func (s *PostgresStore) InsertNew(ctx context.Context, posts []threads.SearchRes
 
 func (s *PostgresStore) Unclassified(ctx context.Context, limit int) ([]threads.SearchResult, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,shortcode,post_text,username,permalink,posted_at,searched_at,source,source_url
-		FROM leadwatch_posts WHERE classified_at IS NULL AND source IN ('threads_search_ssr','threads_search_graphql')
+		FROM leadwatch_posts WHERE classified_at IS NULL AND source IN ('threads_search_ssr','threads_search_graphql','threads_browser_search')
 		ORDER BY searched_at ASC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -167,7 +168,7 @@ func (s *PostgresStore) SaveAssessment(ctx context.Context, a Assessment) error 
 func (s *PostgresStore) PendingNotifications(ctx context.Context, limit int) ([]Lead, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,shortcode,post_text,username,permalink,posted_at,searched_at,qualified,score,category,reason,draft,source,source_url
 		FROM leadwatch_posts WHERE classified_at IS NOT NULL AND qualified=TRUE AND notified_at IS NULL
-		AND source IN ('threads_search_ssr','threads_search_graphql')
+		AND source IN ('threads_search_ssr','threads_search_graphql','threads_browser_search')
 		ORDER BY score DESC, searched_at ASC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err

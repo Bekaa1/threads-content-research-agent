@@ -1,0 +1,16 @@
+{
+  "name": "threads-local-lead-collector",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "init": "node collector.mjs init",
+    "start": "node collector.mjs start",
+    "once": "node collector.mjs once",
+    "status": "node collector.mjs status",
+    "stop": "node collector.mjs stop",
+    "test": "node --test *.test.mjs",
+    "browser:install": "playwright install chromium"
+  },
+  "engines": { "node": ">=22" },
+  "dependencies": { "playwright": "1.63.0" }
+}
