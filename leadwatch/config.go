@@ -57,10 +57,10 @@ func ConfigFromEnv() (Config, error) {
 		cfg.Port = "8080"
 	}
 	intervalMinutes := 15
-	if raw := strings.TrimSpace(os.Getenv("LEADS_INTERVAL_MINUTES")); raw != "" {
+	if raw := strings.TrimSpace(os.Getenv("LEADWATCH_INTERVAL_MINUTES")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 15 || parsed > 1440 {
-			return Config{}, errors.New("LEADS_INTERVAL_MINUTES must be between 15 and 1440")
+			return Config{}, errors.New("LEADWATCH_INTERVAL_MINUTES must be between 15 and 1440")
 		}
 		intervalMinutes = parsed
 	}
