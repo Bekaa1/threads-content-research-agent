@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,7 +23,21 @@ var (
 	errGroqIncompleteResultSet = errors.New("Groq returned an incomplete result set")
 	errGroqInvalidLeadJSON     = errors.New("Groq returned invalid lead JSON")
 	errGroqInvalidLeadSet      = errors.New("Groq returned an invalid lead set")
+	errGroqRateLimited         = errors.New("Groq rate limited")
 )
+
+type groqRateLimitError struct {
+	retryAfter time.Duration
+}
+
+func (e *groqRateLimitError) Error() string {
+	if e.retryAfter > 0 {
+		return fmt.Sprintf("Groq rate limited; retry after %s", e.retryAfter.Round(time.Second))
+	}
+	return errGroqRateLimited.Error()
+}
+
+func (e *groqRateLimitError) Unwrap() error { return errGroqRateLimited }
 
 type GroqAnalyzer struct {
 	apiKey string
@@ -171,6 +186,9 @@ func (a *GroqAnalyzer) analyzeRequest(ctx context.Context, posts []threads.Searc
 		return nil, errors.New("could not read Groq response")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, &groqRateLimitError{retryAfter: groqRetryAfter(resp.Header, time.Now())}
+		}
 		return nil, fmt.Errorf("Groq returned HTTP %d", resp.StatusCode)
 	}
 	var envelope struct {
@@ -200,6 +218,36 @@ func (a *GroqAnalyzer) analyzeRequest(ctx context.Context, posts []threads.Searc
 		}
 	}
 	return result.Leads, nil
+}
+
+func groqRetryAfter(headers http.Header, now time.Time) time.Duration {
+	if retryAfter := parseGroqReset(headers.Get("Retry-After"), now); retryAfter > 0 {
+		return retryAfter
+	}
+	var longest time.Duration
+	for _, name := range []string{"X-RateLimit-Reset-Requests", "X-RateLimit-Reset-Tokens"} {
+		if reset := parseGroqReset(headers.Get(name), now); reset > longest {
+			longest = reset
+		}
+	}
+	return longest
+}
+
+func parseGroqReset(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseFloat(value, 64); err == nil && seconds > 0 && seconds <= 86400 {
+		return time.Duration(seconds * float64(time.Second))
+	}
+	if duration, err := time.ParseDuration(value); err == nil && duration > 0 && duration <= 24*time.Hour {
+		return duration
+	}
+	if at, err := http.ParseTime(value); err == nil && at.After(now) {
+		return min(at.Sub(now), 24*time.Hour)
+	}
+	return 0
 }
 
 func classifyNetworkError(err error) string {

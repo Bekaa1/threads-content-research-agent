@@ -70,6 +70,19 @@ func (w *Worker) Run(ctx context.Context, interval time.Duration) error {
 		delay = nextScanDelay(interval, delay, err)
 		w.logger.Info("next lead scan scheduled", "delay_minutes", int(delay.Minutes()))
 		timer := time.NewTimer(delay)
+		if errors.Is(err, errGroqRateLimited) {
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			select {
+			case <-w.wake:
+			default:
+			}
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -82,6 +95,13 @@ func (w *Worker) Run(ctx context.Context, interval time.Duration) error {
 }
 
 func nextScanDelay(interval, previous time.Duration, err error) time.Duration {
+	var groqLimit *groqRateLimitError
+	if errors.As(err, &groqLimit) {
+		if groqLimit.retryAfter > 0 {
+			return max(groqLimit.retryAfter, time.Second)
+		}
+		return interval
+	}
 	if errors.Is(err, errSearchRateLimited) {
 		return min(previous*2, max(time.Hour, interval))
 	}
