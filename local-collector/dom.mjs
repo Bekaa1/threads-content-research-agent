@@ -30,10 +30,13 @@ export function readSearchDOM({ query, expectedUser }) {
     const link = new URL(anchor.getAttribute('href'), location.origin);
     if (link.origin !== location.origin || !/^\/@[A-Za-z0-9._]{1,40}\/post\/[A-Za-z0-9_-]{6,11}\/?$/.test(link.pathname)) continue;
     const candidates = Array.from(card.querySelectorAll('span[dir="auto"]'))
-      .filter(el => visible(el) && !el.closest('a,button,[role="button"],time') && el.closest('[data-pressable-container="true"]') === card)
-      .map(el => textOnly(el).trim()).filter(text => text.length >= 8);
-    const text = candidates.sort((a,b) => b.length-a.length)[0];
-    if (!text) continue;
+      .filter(el => visible(el) && !el.closest('a,button,[role="button"],time') && !el.querySelector('time') && el.closest('[data-pressable-container="true"]') === card)
+      .filter(el => !el.parentElement.closest('span[dir="auto"]'))
+      .map(el => textOnly(el).trim()).filter(text => text && !/^[\d\s.,]+[kKmM]?$/.test(text));
+    // Captions may be several sibling spans (one per paragraph). Taking only
+    // the longest loses buyer/seller context and can flip the classification.
+    const text = candidates.join('\n');
+    if (text.length < 8) continue;
     const permalink = link.origin + link.pathname.replace(/\/$/, '');
     if (seen.has(permalink)) continue;
     seen.add(permalink);
