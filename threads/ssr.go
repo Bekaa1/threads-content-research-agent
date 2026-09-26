@@ -141,48 +141,53 @@ func parseSearchPostsSSR(html string) ([]Post, bool) {
 			continue
 		}
 		for _, results := range findSearchResults(data, 0) {
-			edges, ok := results["edges"].([]any)
+			parsed, ok := postsFromSearchConnection(results)
 			if !ok {
 				continue
 			}
 			validSearchPayload = true
-			for _, edge := range edges {
-				em, ok := edge.(map[string]any)
-				if !ok {
-					continue
-				}
-				node, ok := em["node"].(map[string]any)
-				if !ok {
-					continue
-				}
-				thread, ok := node["thread"].(map[string]any)
-				if !ok {
-					continue
-				}
-				items, ok := thread["thread_items"].([]any)
-				if !ok {
-					continue
-				}
-				for _, item := range items {
-					im, ok := item.(map[string]any)
-					if !ok {
-						continue
-					}
-					pm, ok := im["post"].(map[string]any)
-					if !ok {
-						continue
-					}
-					post := parsePost(pm)
-					if post.ID == "" || seen[post.ID] {
-						continue
-					}
+			for _, post := range parsed {
+				if !seen[post.ID] {
 					seen[post.ID] = true
+					post.SearchSource = SearchSourceSSR
 					posts = append(posts, post)
 				}
 			}
 		}
 	}
 	return posts, validSearchPayload
+}
+
+// Fail closed on unknown connection shapes. A generic thread_items walker
+// cannot distinguish keyword results from the home/recommended feed.
+func postsFromSearchConnection(results map[string]any) ([]Post, bool) {
+	edges, ok := results["edges"].([]any)
+	if !ok {
+		return nil, false
+	}
+	var posts []Post
+	for _, edge := range edges {
+		em, _ := edge.(map[string]any)
+		node, _ := em["node"].(map[string]any)
+		thread, _ := node["thread"].(map[string]any)
+		items, ok := thread["thread_items"].([]any)
+		if !ok || len(items) == 0 {
+			return nil, false
+		}
+		for _, item := range items {
+			im, _ := item.(map[string]any)
+			pm, ok := im["post"].(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			post := parsePost(pm)
+			if post.ID == "" {
+				return nil, false
+			}
+			posts = appendUniquePosts(posts, []Post{post})
+		}
+	}
+	return posts, true
 }
 
 // pageInfoSSR returns the end_cursor and has_next_page for GraphQL pagination.

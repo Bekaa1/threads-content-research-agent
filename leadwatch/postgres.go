@@ -39,6 +39,13 @@ func NewPostgresStore(ctx context.Context, db *sql.DB) (*PostgresStore, error) {
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		return nil, errors.New("could not initialize leadwatch database table")
 	}
+	// Existing rows retain an empty source: do not retroactively claim their
+	// search provenance was verified. No historical rows are deleted.
+	if _, err := db.ExecContext(ctx, `ALTER TABLE leadwatch_posts
+		ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS source_url TEXT NOT NULL DEFAULT ''`); err != nil {
+		return nil, errors.New("could not initialize search provenance columns")
+	}
 	return &PostgresStore{db: db}, nil
 }
 
@@ -49,11 +56,14 @@ func (s *PostgresStore) InsertNew(ctx context.Context, posts []threads.SearchRes
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	const query = `INSERT INTO leadwatch_posts (post_id,query,shortcode,post_text,username,permalink,posted_at,searched_at)
-		VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7::timestamptz,'0001-01-01 00:00:00+00'),$8)
-		ON CONFLICT (post_id) DO NOTHING`
+	const query = `INSERT INTO leadwatch_posts (post_id,query,shortcode,post_text,username,permalink,posted_at,searched_at,source,source_url)
+		VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7::timestamptz,'0001-01-01 00:00:00+00'),$8,$9,$10)
+		ON CONFLICT (post_id) DO UPDATE SET
+		query=EXCLUDED.query,post_text=EXCLUDED.post_text,source=EXCLUDED.source,source_url=EXCLUDED.source_url,
+		searched_at=EXCLUDED.searched_at,classified_at=NULL,qualified=NULL,score=NULL,category='',reason='',draft=''
+		WHERE leadwatch_posts.source=''`
 	for _, post := range posts {
-		if post.ID == "" || post.Text == "" {
+		if post.ID == "" || post.Text == "" || !post.VerifiedSearch() {
 			continue
 		}
 		searchedAt := post.SearchedAt
@@ -61,7 +71,7 @@ func (s *PostgresStore) InsertNew(ctx context.Context, posts []threads.SearchRes
 			searchedAt = time.Now().UTC()
 		}
 		postedAt := post.Timestamp
-		result, err := tx.ExecContext(ctx, query, post.ID, post.Query, post.Shortcode, post.Text, post.Username, post.Permalink, postedAt, searchedAt)
+		result, err := tx.ExecContext(ctx, query, post.ID, post.Query, post.Shortcode, post.Text, post.Username, post.Permalink, postedAt, searchedAt, post.Source, post.SourceURL)
 		if err != nil {
 			return nil, err
 		}
@@ -80,8 +90,9 @@ func (s *PostgresStore) InsertNew(ctx context.Context, posts []threads.SearchRes
 }
 
 func (s *PostgresStore) Unclassified(ctx context.Context, limit int) ([]threads.SearchResult, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,shortcode,post_text,username,permalink,posted_at,searched_at
-		FROM leadwatch_posts WHERE classified_at IS NULL ORDER BY searched_at ASC LIMIT $1`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,shortcode,post_text,username,permalink,posted_at,searched_at,source,source_url
+		FROM leadwatch_posts WHERE classified_at IS NULL AND source IN ('threads_search_ssr','threads_search_graphql')
+		ORDER BY searched_at ASC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +101,7 @@ func (s *PostgresStore) Unclassified(ctx context.Context, limit int) ([]threads.
 	for rows.Next() {
 		var p threads.SearchResult
 		var postedAt sql.NullTime
-		if err := rows.Scan(&p.ID, &p.Query, &p.Shortcode, &p.Text, &p.Username, &p.Permalink, &postedAt, &p.SearchedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Query, &p.Shortcode, &p.Text, &p.Username, &p.Permalink, &postedAt, &p.SearchedAt, &p.Source, &p.SourceURL); err != nil {
 			return nil, err
 		}
 		if postedAt.Valid {
@@ -105,7 +116,7 @@ func (s *PostgresStore) RecentPosts(ctx context.Context, limit int) ([]ScannedPo
 	if limit < 1 || limit > 5 {
 		return nil, errors.New("recent post limit must be between 1 and 5")
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,post_text,username,permalink,posted_at,searched_at,qualified,score,category
+	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,post_text,username,permalink,posted_at,searched_at,qualified,score,category,source,source_url
 		FROM leadwatch_posts ORDER BY searched_at DESC, created_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -118,7 +129,7 @@ func (s *PostgresStore) RecentPosts(ctx context.Context, limit int) ([]ScannedPo
 		var postedAt sql.NullTime
 		var qualified sql.NullBool
 		var score sql.NullInt64
-		if err := rows.Scan(&post.PostID, &post.Query, &post.Text, &post.Username, &post.Permalink, &postedAt, &post.SearchedAt, &qualified, &score, &post.Category); err != nil {
+		if err := rows.Scan(&post.PostID, &post.Query, &post.Text, &post.Username, &post.Permalink, &postedAt, &post.SearchedAt, &qualified, &score, &post.Category, &post.Source, &post.SourceURL); err != nil {
 			return nil, err
 		}
 		if postedAt.Valid {
@@ -154,8 +165,9 @@ func (s *PostgresStore) SaveAssessment(ctx context.Context, a Assessment) error 
 }
 
 func (s *PostgresStore) PendingNotifications(ctx context.Context, limit int) ([]Lead, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,shortcode,post_text,username,permalink,posted_at,searched_at,qualified,score,category,reason,draft
+	rows, err := s.db.QueryContext(ctx, `SELECT post_id,query,shortcode,post_text,username,permalink,posted_at,searched_at,qualified,score,category,reason,draft,source,source_url
 		FROM leadwatch_posts WHERE classified_at IS NOT NULL AND qualified=TRUE AND notified_at IS NULL
+		AND source IN ('threads_search_ssr','threads_search_graphql')
 		ORDER BY score DESC, searched_at ASC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -165,7 +177,7 @@ func (s *PostgresStore) PendingNotifications(ctx context.Context, limit int) ([]
 	for rows.Next() {
 		var lead Lead
 		var postedAt sql.NullTime
-		if err := rows.Scan(&lead.ID, &lead.Query, &lead.Shortcode, &lead.Text, &lead.Username, &lead.Permalink, &postedAt, &lead.SearchedAt, &lead.Qualified, &lead.Score, &lead.Category, &lead.Reason, &lead.Draft); err != nil {
+		if err := rows.Scan(&lead.ID, &lead.Query, &lead.Shortcode, &lead.Text, &lead.Username, &lead.Permalink, &postedAt, &lead.SearchedAt, &lead.Qualified, &lead.Score, &lead.Category, &lead.Reason, &lead.Draft, &lead.Source, &lead.SourceURL); err != nil {
 			return nil, err
 		}
 		if postedAt.Valid {

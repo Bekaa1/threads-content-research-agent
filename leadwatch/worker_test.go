@@ -101,10 +101,13 @@ func TestRunOnceNotifiesQualifiedPostOnlyAndDeduplicates(t *testing.T) {
 		{ID: "seller-1", Query: "q", Username: "seller", Text: "I am a developer looking for clients"},
 		{ID: "old-buyer", Query: "q", Username: "old", Text: "We need a developer", Timestamp: time.Now().Add(-60 * 24 * time.Hour)},
 	}
-	searcher := fakeSearcher{posts: map[string][]threads.SearchResult{"q": posts}}
+	for i := range posts {
+		posts[i].Source = threads.SearchSourceSSR
+	}
+	searcher := fakeSearcher{posts: map[string][]threads.SearchResult{"developer": posts}}
 	store := newMemoryStore()
 	notifier := &fakeNotifier{}
-	worker, err := NewWorker(searcher, fakeAnalyzer{}, notifier, store, []string{"q"}, "software services", slog.New(slog.NewTextHandler(&strings.Builder{}, nil)))
+	worker, err := NewWorker(searcher, fakeAnalyzer{}, notifier, store, []string{"developer"}, "software services", slog.New(slog.NewTextHandler(&strings.Builder{}, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

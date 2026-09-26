@@ -23,6 +23,9 @@ type Worker struct {
 
 const maxLeadAge = 30 * 24 * time.Hour
 
+var errSearchRateLimited = errors.New("Threads search rate limited; remaining queries skipped")
+var errOffTopicSearch = errors.New("Threads returned posts unrelated to the requested service topic")
+
 func NewWorker(searcher Searcher, analyzer Analyzer, notifier Notifier, store Store, queries []string, offer string, logger *slog.Logger) (*Worker, error) {
 	if searcher == nil || analyzer == nil || notifier == nil || store == nil {
 		return nil, errors.New("worker dependencies are required")
@@ -40,33 +43,57 @@ func (w *Worker) Run(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
 		return errors.New("worker interval must be positive")
 	}
-	if err := w.RunOnce(ctx); err != nil && ctx.Err() == nil {
-		w.logger.Error("lead scan cycle failed", "error", err)
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	delay := interval
 	for {
+		err := w.RunOnce(ctx)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			w.logger.Error("lead scan cycle failed", "error", err)
+		}
+		delay = nextScanDelay(interval, delay, err)
+		w.logger.Info("next lead scan scheduled", "delay_minutes", int(delay.Minutes()))
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-ticker.C:
-			if err := w.RunOnce(ctx); err != nil && ctx.Err() == nil {
-				w.logger.Error("lead scan cycle failed", "error", err)
-			}
+		case <-timer.C:
 		}
 	}
 }
 
+func nextScanDelay(interval, previous time.Duration, err error) time.Duration {
+	if errors.Is(err, errSearchRateLimited) {
+		return min(previous*2, max(time.Hour, interval))
+	}
+	return interval
+}
+
 func (w *Worker) RunOnce(ctx context.Context) error {
 	var collected []threads.SearchResult
+	succeeded, failed, skipped := 0, 0, 0
+	var scanErr error
 	for _, query := range w.queries {
 		count := 0
+		offTopic := 0
+		var queryErr error
 		for result, err := range w.searcher.Search(ctx, query, maxSearchPosts) {
 			if err != nil {
+				queryErr = err
 				w.logger.Warn("Threads search query failed", "query", query, "error", err)
 				break
 			}
+			if !result.VerifiedSearch() {
+				queryErr = threads.ErrSearchUnavailable
+				break
+			}
 			if strings.TrimSpace(result.ID) == "" || strings.TrimSpace(result.Text) == "" {
+				continue
+			}
+			if !queryTopicMatches(query, result.Text) {
+				offTopic++
 				continue
 			}
 			collected = append(collected, result)
@@ -74,6 +101,28 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			if count >= maxSearchPosts {
 				break
 			}
+		}
+		status := "ok"
+		if queryErr == nil && count == 0 && offTopic > 0 {
+			queryErr = errOffTopicSearch
+		}
+		if queryErr != nil {
+			failed++
+			status = "failed"
+			if errors.Is(queryErr, errOffTopicSearch) {
+				status = "off_topic"
+			}
+		} else {
+			succeeded++
+			if count == 0 {
+				status = "empty"
+			}
+		}
+		w.logger.Info("Threads query result", "query", query, "status", status, "verified_posts", count, "off_topic_rejected", offTopic)
+		if threads.Code(queryErr) == threads.ExitRateLimit {
+			scanErr = errSearchRateLimited
+			skipped = len(w.queries) - succeeded - failed
+			break
 		}
 	}
 	newPosts, err := w.store.InsertNew(ctx, collected)
@@ -146,8 +195,20 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			}
 		}
 	}
-	w.logger.Info("lead scan cycle complete", "queries", len(w.queries), "posts_seen", len(collected), "new_posts", len(newPosts), "notifications", len(pending))
-	return nil
+	status := "ok"
+	if failed > 0 {
+		status = "degraded"
+		if succeeded == 0 {
+			status = "unavailable"
+		}
+		if scanErr == nil {
+			scanErr = fmt.Errorf("Threads search failed for %d of %d queries", failed, len(w.queries))
+		}
+	} else if len(collected) == 0 {
+		status = "empty"
+	}
+	w.logger.Info("lead scan cycle finished", "status", status, "queries", len(w.queries), "queries_succeeded", succeeded, "queries_failed", failed, "queries_skipped", skipped, "posts_seen", len(collected), "new_posts", len(newPosts), "notifications", len(pending))
+	return scanErr
 }
 
 func validateAssessments(posts []threads.SearchResult, assessments []Assessment) error {

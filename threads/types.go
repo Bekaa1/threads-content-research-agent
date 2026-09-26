@@ -25,6 +25,8 @@ type Profile struct {
 
 // Post is a single Threads post.
 type Post struct {
+	// Set only by a parser that recognized a keyword-search result connection.
+	SearchSource string    `json:"-"`
 	ID           string    `json:"id"`
 	Shortcode    string    `json:"shortcode,omitempty"`
 	Text         string    `json:"text,omitempty"`
@@ -78,6 +80,8 @@ type Reply struct {
 type SearchResult struct {
 	ID          string    `json:"id"`
 	Query       string    `json:"query"`
+	Source      string    `json:"source,omitempty"`
+	SourceURL   string    `json:"source_url,omitempty"`
 	Shortcode   string    `json:"shortcode,omitempty"`
 	Text        string    `json:"text,omitempty"`
 	Username    string    `json:"username,omitempty"`
@@ -94,6 +98,16 @@ type SearchResult struct {
 	IsQuotePost bool      `json:"is_quote_post,omitempty"`
 	FetchedAt   time.Time `json:"fetched_at,omitempty"`
 	SearchedAt  time.Time `json:"searched_at"`
+}
+
+const (
+	SearchSourceSSR     = "threads_search_ssr"
+	SearchSourceGraphQL = "threads_search_graphql"
+)
+
+// VerifiedSearch reports structural provenance, not semantic relevance or buyer intent.
+func (r SearchResult) VerifiedSearch() bool {
+	return r.Source == SearchSourceSSR || r.Source == SearchSourceGraphQL
 }
 
 // asReply converts a parsed post (a reply lives in the same thread_items shape

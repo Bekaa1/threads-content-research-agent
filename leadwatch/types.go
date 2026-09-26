@@ -31,6 +31,8 @@ type Lead struct {
 type ScannedPost struct {
 	PostID     string     `json:"post_id"`
 	Query      string     `json:"query"`
+	Source     string     `json:"source"`
+	SourceURL  string     `json:"source_url"`
 	Text       string     `json:"text"`
 	Username   string     `json:"username"`
 	Permalink  string     `json:"permalink"`

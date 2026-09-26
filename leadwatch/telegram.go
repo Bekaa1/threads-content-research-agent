@@ -70,6 +70,15 @@ func formatTelegramLead(lead Lead) string {
 		"<b>Новый лид из Threads</b> · " + html.EscapeString(lead.Category) + " · " + fmt.Sprintf("%d/100", lead.Score),
 		"Автор: @" + html.EscapeString(username),
 	}
+	if lead.Query != "" {
+		lines = append(lines, "Запрос: "+html.EscapeString(lead.Query))
+	}
+	if lead.Source != "" {
+		lines = append(lines, "Источник: "+html.EscapeString(lead.Source))
+	}
+	if !lead.Timestamp.IsZero() {
+		lines = append(lines, "Дата поста (UTC): "+lead.Timestamp.UTC().Format("2006-01-02 15:04"))
+	}
 	if strings.HasPrefix(lead.Permalink, "https://www.threads.com/") || strings.HasPrefix(lead.Permalink, "https://threads.com/") {
 		lines = append(lines, "<a href=\""+html.EscapeString(lead.Permalink)+"\">Открыть пост</a>")
 	}

@@ -129,6 +129,8 @@ func (c *Client) fetch(ctx context.Context, target string) ([]byte, error) {
 			continue
 		}
 		switch {
+		case code == 401 || code == 403:
+			return body, errLoginWall()
 		case code == 404:
 			return body, errNotFound(target)
 		case code == 429 || code == 503:
@@ -143,6 +145,8 @@ func (c *Client) fetch(ctx context.Context, target string) ([]byte, error) {
 			}
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 			continue
+		case code >= 400:
+			return body, codeErr(ExitNetwork, "Threads returned HTTP %d", code)
 		}
 		return body, nil
 	}

@@ -102,7 +102,7 @@ func TestSearchShellUsesGraphQLFallback(t *testing.T) {
 			methods = append(methods, req.Method)
 			body := `<script type="application/json" data-sjs>{"queryName":"BarcelonaSearchResultsQuery","data":{"searchResults":{"shell":true}}}</script>`
 			if req.Method == http.MethodPost {
-				body = `{"data":{"thread_items":[{"post":{"pk":"graphql-1","code":"GQL1","caption":{"text":"fallback result"},"like_count":4,"user":{"pk":"1","username":"ada"}}}]}}`
+				body = `{"data":{"searchResults":{"edges":[{"node":{"thread":{"thread_items":[{"post":{"pk":"graphql-1","code":"GQL1","caption":{"text":"fallback result"},"like_count":4,"user":{"pk":"1","username":"ada"}}}]}}}]}}}`
 			}
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -132,7 +132,7 @@ func TestSearchContinuesSSRWindowThroughGraphQLCursor(t *testing.T) {
 			methods = append(methods, req.Method)
 			body := `<script type="application/json" data-sjs>{"queryName":"BarcelonaSearchResultsQuery","data":{"searchResults":{"edges":[{"node":{"thread":{"thread_items":[{"post":{"pk":"ssr-1","code":"SSR1","caption":{"text":"first result"},"like_count":1,"user":{"pk":"1","username":"ada"}}}]}}}],"page_info":{"end_cursor":"CURSOR","has_next_page":true}}}}</script>`
 			if req.Method == http.MethodPost {
-				body = `{"data":{"thread_items":[{"post":{"pk":"gql-2","code":"GQL2","caption":{"text":"continued result"},"like_count":2,"user":{"pk":"2","username":"bob"}}}]}}`
+				body = `{"data":{"searchResults":{"edges":[{"node":{"thread":{"thread_items":[{"post":{"pk":"gql-2","code":"GQL2","caption":{"text":"continued result"},"like_count":2,"user":{"pk":"2","username":"bob"}}}]}}}]}}}`
 			}
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 		})},

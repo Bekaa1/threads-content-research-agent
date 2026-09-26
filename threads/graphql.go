@@ -67,14 +67,14 @@ func (c *Client) graphqlPostReplies(ctx context.Context, postID string) ([]Post,
 }
 
 // graphqlSearch runs the logged-out keyword search query.
-func (c *Client) graphqlSearch(ctx context.Context, query string) ([]Post, error) {
-	return c.graphqlSearchThreads(ctx, query, "")
+func (c *Client) graphqlSearch(ctx context.Context, query string, limits ...int) ([]Post, error) {
+	return c.graphqlSearchThreads(ctx, query, "", limits...)
 }
 
 // graphqlSearchThreads continues a search result window through its cursor.
 // The same hard page cap as profile pagination keeps a malformed or stale
 // cursor from turning one bounded search into an unbounded crawl.
-func (c *Client) graphqlSearchThreads(ctx context.Context, query, startCursor string) ([]Post, error) {
+func (c *Client) graphqlSearchThreads(ctx context.Context, query, startCursor string, limits ...int) ([]Post, error) {
 	var out []Post
 	cursor := startCursor
 	for page := 0; page < maxGraphQLPages; page++ {
@@ -86,9 +86,23 @@ func (c *Client) graphqlSearchThreads(ctx context.Context, query, startCursor st
 		if err != nil {
 			return out, err
 		}
-		out = appendUniquePosts(out, postsFromGraphQL(raw))
-		next, more, ok := findPageInfo(raw, 0)
-		if !ok || !more || next == "" || next == cursor {
+		data, _ := raw.(map[string]any)
+		connection, _ := data["searchResults"].(map[string]any)
+		posts, valid := postsFromSearchConnection(connection)
+		if !valid {
+			return out, ErrSearchUnavailable
+		}
+		for i := range posts {
+			posts[i].SearchSource = SearchSourceGraphQL
+		}
+		out = appendUniquePosts(out, posts)
+		if len(limits) > 0 && limits[0] > 0 && len(out) >= limits[0] {
+			return out[:limits[0]], nil
+		}
+		pageInfo, _ := connection["page_info"].(map[string]any)
+		next, _ := pageInfo["end_cursor"].(string)
+		more, _ := pageInfo["has_next_page"].(bool)
+		if !more || next == "" || next == cursor {
 			break
 		}
 		cursor = next
@@ -126,15 +140,28 @@ func (c *Client) graphqlPost(ctx context.Context, docID string, vars map[string]
 		return nil, codeErr(ExitNetwork, "graphql request: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, codeErr(ExitRateLimit, "Threads GraphQL rate limited (HTTP 429)")
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, errLoginWall()
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, codeErr(ExitNetwork, "Threads GraphQL returned HTTP %d", resp.StatusCode)
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 	var env struct {
-		Data json.RawMessage `json:"data"`
+		Data   json.RawMessage   `json:"data"`
+		Errors []json.RawMessage `json:"errors"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
 		return nil, codeErr(ExitNotFound, "graphql returned an unexpected shape (doc_id may be stale)")
+	}
+	if len(env.Errors) > 0 || len(env.Data) == 0 || string(env.Data) == "null" {
+		return nil, codeErr(ExitNotFound, "Threads GraphQL returned errors or no data")
 	}
 	var data any
 	if err := json.Unmarshal(env.Data, &data); err != nil {
